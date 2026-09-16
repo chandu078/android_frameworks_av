@@ -55,6 +55,8 @@
 #include <mediautils/TimeCheck.h>
 #include <memunreachable/memunreachable.h>
 // required for effect matching
+#include <afutils/MusicHaptics.h>
+#include <private/android_filesystem_config.h>
 #include <system/audio_effects/effect_aec.h>
 #include <system/audio_effects/effect_ns.h>
 #include <system/audio_effects/effect_spatializer.h>
@@ -1807,6 +1809,35 @@ status_t AudioFlinger::setParameters(audio_io_handle_t ioHandle, const String8& 
     // check calling permissions
     VALUE_OR_RETURN_CONVERTED(enforceCallingPermission(MODIFY_AUDIO_SETTINGS));
 
+    // This control must not be accepted from apps with MODIFY_AUDIO_SETTINGS, nor sent to HALs.
+    AudioParameter musicParameters(keyValuePairs);
+    String8 musicValue;
+    if (musicParameters.get(String8(afutils::kMusicHapticsParameter), musicValue) == NO_ERROR) {
+        if (IPCThreadState::self()->getCallingUid() != AID_SYSTEM) return PERMISSION_DENIED;
+        if (ioHandle != AUDIO_IO_HANDLE_NONE || musicParameters.size() != 1) return BAD_VALUE;
+        const auto config = afutils::MusicHapticsConfig::parse(musicValue.c_str());
+        if (!config || (config->sessionId != 0
+                && audio_unique_id_get_use(config->sessionId) != AUDIO_UNIQUE_ID_USE_SESSION)) {
+            return BAD_VALUE;
+        }
+        // Never hold the configuration mutex while acquiring AudioFlinger/thread locks.
+        const auto previous = afutils::replaceMusicHapticsConfig(*config);
+        if (!(previous == *config)) {
+            audio_utils::lock_guard lock(mutex());
+            for (const auto& [_, thread] : mPlaybackThreads) {
+                if (previous.sessionId > 0) {
+                    thread->invalidateTracksForAudioSession(
+                            static_cast<audio_session_t>(previous.sessionId));
+                }
+                if (config->sessionId > 0 && config->sessionId != previous.sessionId) {
+                    thread->invalidateTracksForAudioSession(
+                            static_cast<audio_session_t>(config->sessionId));
+                }
+            }
+        }
+        return NO_ERROR;
+    }
+
     String8 filteredKeyValuePairs = keyValuePairs;
     filterReservedParameters(filteredKeyValuePairs, IPCThreadState::self()->getCallingUid());
 
@@ -1888,6 +1919,13 @@ String8 AudioFlinger::getParameters(audio_io_handle_t ioHandle, const String8& k
 {
     ALOGVV("getParameters() io %d, keys %s, calling pid %d",
             ioHandle, keys.c_str(), IPCThreadState::self()->getCallingPid());
+
+    if (ioHandle == AUDIO_IO_HANDLE_NONE && keys == String8(afutils::kMusicHapticsParameter)) {
+        if (IPCThreadState::self()->getCallingUid() != AID_SYSTEM) return String8();
+        const auto config = afutils::getMusicHapticsConfig();
+        return String8((std::string(afutils::kMusicHapticsParameter) + "="
+                + config.toString()).c_str());
+    }
 
     audio_utils::lock_guard _l(mutex());
 

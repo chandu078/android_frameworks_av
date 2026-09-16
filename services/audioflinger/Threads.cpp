@@ -3073,7 +3073,8 @@ status_t PlaybackThread::addTrack_l(const sp<IAfTrack>& track)
             // call Tracks.mute/unmute which also require thread's lock.
             mutex().unlock();
             const os::HapticScale hapticScale = afutils::onExternalVibrationStart(
-                    track->getExternalVibration());
+                    track->getExternalVibration(), track->isSystemMusicHaptics(),
+                    track->sessionId(), track->uid());
             std::optional<media::AudioVibratorInfo> vibratorInfo;
             {
                 // TODO(b/184194780): Use the vibrator information from the vibrator that will be
@@ -4876,9 +4877,10 @@ NO_THREAD_SAFETY_ANALYSIS  // release and re-acquire mutex()
             }
             mutex().lock();
         }
-        if (mHapticChannelCount > 0 &&
-                ((track->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
-                        || (chain != nullptr && chain->containsHapticGeneratingEffect()))) {
+        // The generating effect may already have been released by the system controller.
+        // Every track on this thread owns an external-vibration token; stopping an inactive
+        // token is harmless and ensures a removed generator cannot leave external control held.
+        if (mHapticChannelCount > 0) {
             mutex().unlock();
             // Unlock due to VibratorService will lock for this call and will
             // call Tracks.mute/unmute which also require thread's lock.

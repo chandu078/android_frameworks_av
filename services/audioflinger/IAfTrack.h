@@ -554,6 +554,7 @@ public:
      */
     virtual void setHapticMaxAmplitude(float maxAmplitude) = 0;
     virtual sp<os::ExternalVibration> getExternalVibration() const = 0;
+    virtual bool isSystemMusicHaptics() const = 0;
 
     // This function should be called with holding thread lock.
     virtual void updateTeePatches_l() REQUIRES(audio_utils::ThreadBase_Mutex)

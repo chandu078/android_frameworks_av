@@ -29,6 +29,23 @@
 
 namespace android::afutils {
 
+namespace {
+std::mutex gMusicHapticsMutex;
+MusicHapticsConfig gMusicHapticsConfig;
+} // namespace
+
+MusicHapticsConfig getMusicHapticsConfig() {
+    std::lock_guard lock(gMusicHapticsMutex);
+    return gMusicHapticsConfig;
+}
+
+MusicHapticsConfig replaceMusicHapticsConfig(const MusicHapticsConfig& config) {
+    std::lock_guard lock(gMusicHapticsMutex);
+    const auto previous = gMusicHapticsConfig;
+    gMusicHapticsConfig = config;
+    return previous;
+}
+
 static sp<os::IExternalVibratorService> getExternalVibratorService() {
     static std::mutex m;
     static sp<os::IExternalVibratorService> sExternalVibratorService;
@@ -44,7 +61,15 @@ static sp<os::IExternalVibratorService> getExternalVibratorService() {
     return sExternalVibratorService;
 }
 
-os::HapticScale onExternalVibrationStart(const sp<os::ExternalVibration>& externalVibration) {
+os::HapticScale onExternalVibrationStart(const sp<os::ExternalVibration>& externalVibration,
+        bool musicHaptics, int sessionId, int uid) {
+    float musicGain = 1.0f;
+    if (musicHaptics) {
+        const auto config = getMusicHapticsConfig();
+        // A revoked track must not restart a system-attributed vibration.
+        if (!config.matches(sessionId, uid)) return os::HapticScale::mute();
+        musicGain = config.gain();
+    }
     if (externalVibration->getAudioAttributes().flags & AUDIO_FLAG_MUTE_HAPTIC) {
         ALOGD("%s, mute haptic according to audio attributes flag", __func__);
         return os::HapticScale::mute();
@@ -55,6 +80,8 @@ os::HapticScale onExternalVibrationStart(const sp<os::ExternalVibration>& extern
         binder::Status status = evs->onExternalVibrationStart(*externalVibration, &ret);
         if (status.isOk()) {
             ALOGD("%s, start external vibration with intensity as %d", __func__, ret.scaleLevel);
+            // Attenuate only; the vibrator service still owns mute/priority and hardware limits.
+            ret.adaptiveHapticsScale *= musicGain;
             return os::ExternalVibration::externalVibrationScaleToHapticScale(ret);
         } else {
             ALOGE("Start external vibration request failed: %s", status.toString8().c_str());

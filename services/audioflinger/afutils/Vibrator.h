@@ -17,12 +17,15 @@
 
 #pragma once
 
+#include "MusicHaptics.h"
+
 #include <vibrator/ExternalVibration.h>
 #include <vibrator/ExternalVibrationUtils.h>
 
 namespace android::afutils {
 
-os::HapticScale onExternalVibrationStart(const sp<os::ExternalVibration>& externalVibration);
+os::HapticScale onExternalVibrationStart(const sp<os::ExternalVibration>& externalVibration,
+        bool musicHaptics = false, int sessionId = 0, int uid = -1);
 
 void onExternalVibrationStop(const sp<os::ExternalVibration>& externalVibration);
 

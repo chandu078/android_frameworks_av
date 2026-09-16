@@ -1933,8 +1933,20 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
     audio_config_t directConfig = *config;
     directConfig.channel_mask = channelMask;
 
-    status_t status = openDirectOutput(stream, session, &directConfig, *flags, devices, &output,
-                                       *attr);
+    // A generator attached to this session needs the haptic mixer after track invalidation.
+    // Direct PCM and preferred bit-perfect outputs would otherwise bypass it on every restore.
+    // Encoded, MMAP and hardware A/V sync streams retain their existing fallback contracts.
+    const bool requiresHapticMixer = audio_is_linear_pcm(config->format)
+            && (*flags & (AUDIO_OUTPUT_FLAG_HW_AV_SYNC | AUDIO_OUTPUT_FLAG_MMAP_NOIRQ)) == 0
+            && !config->offload_info.content_id && !config->offload_info.sync_id
+            && mEffects.hasOrphansForSession(session, FX_IID_HAPTICGENERATOR);
+    if (requiresHapticMixer) {
+        *flags = static_cast<audio_output_flags_t>(*flags & ~(AUDIO_OUTPUT_FLAG_DIRECT
+                | AUDIO_OUTPUT_FLAG_COMPRESS_OFFLOAD | AUDIO_OUTPUT_FLAG_NON_BLOCKING
+                | AUDIO_OUTPUT_FLAG_GAPLESS_OFFLOAD | AUDIO_OUTPUT_FLAG_BIT_PERFECT));
+    }
+    status_t status = requiresHapticMixer ? NAME_NOT_FOUND
+            : openDirectOutput(stream, session, &directConfig, *flags, devices, &output, *attr);
     if (status != NAME_NOT_FOUND) {
         return output;
     }
@@ -1959,7 +1971,7 @@ audio_io_handle_t AudioPolicyManager::getOutputForDevices(
         // get which output is suitable for the specified stream. The actual
         // routing change will happen when startOutput() will be called
         std::set<audio_io_handle_t> outputs = getOutputsForDevices(devices, mOutputs);
-        if (prefMixerConfigInfo != nullptr) {
+        if (prefMixerConfigInfo != nullptr && !requiresHapticMixer) {
             for (audio_io_handle_t outputHandle : outputs) {
                 sp<SwAudioOutputDescriptor> outputDesc = mOutputs.valueFor(outputHandle);
                 if (outputDesc->mProfile == prefMixerConfigInfo->getProfile()) {

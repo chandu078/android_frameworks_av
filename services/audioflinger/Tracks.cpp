@@ -28,6 +28,8 @@
 #include "IAfThread.h"
 #include "ResamplerBufferProvider.h"
 
+#include <afutils/MusicHaptics.h>
+#include <private/android_filesystem_config.h>
 #include <android/media/IAudioPolicyService.h>
 #include <audio_utils/StringUtils.h>
 #include <audio_utils/minifloat.h>
@@ -1013,8 +1015,22 @@ Track::Track(
         mAudioVibrationController = new AudioVibrationController(this);
         std::string packageName = attributionSource.packageName.has_value() ?
             attributionSource.packageName.value() : "";
+        auto vibrationAttributes = mAttr;
+        uid_t vibrationUid = mUid;
+        const auto musicConfig = afutils::getMusicHapticsConfig();
+        mSystemMusicHaptics = musicConfig.matches(mSessionId, mUid)
+                && (mAttr.usage == AUDIO_USAGE_MEDIA || mAttr.usage == AUDIO_USAGE_GAME);
+        if (mSystemMusicHaptics) {
+            // The user enabled a system accessibility effect. Do not require the media app to
+            // request VIBRATE or explicitly unmute haptic channels. The original track attributes,
+            // UID, capture policy and audio routing remain untouched.
+            vibrationUid = AID_SYSTEM;
+            packageName = "android";
+            vibrationAttributes.flags = static_cast<audio_flags_mask_t>(
+                    vibrationAttributes.flags & ~AUDIO_FLAG_MUTE_HAPTIC);
+        }
         mExternalVibration = new os::ExternalVibration(
-                mUid, packageName, mAttr, mAudioVibrationController);
+                vibrationUid, packageName, vibrationAttributes, mAudioVibrationController);
     }
 
     // Once this item is logged by the server, the client can add properties.
@@ -2316,11 +2332,17 @@ bool Track::AudioVibrationController::setMute(bool muted) {
         // Lock for updating mHapticPlaybackEnabled.
         audio_utils::lock_guard _l(thread->mutex());
         auto* const playbackThread = thread->asIAfPlaybackThread().get();
-        if ((mTrack->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
-                && playbackThread->hapticChannelCount() > 0) {
+        const auto chain = playbackThread->getEffectChain_l(mTrack->sessionId());
+        if (playbackThread->hapticChannelCount() > 0
+                && ((mTrack->channelMask() & AUDIO_CHANNEL_HAPTIC_ALL) != AUDIO_CHANNEL_NONE
+                    || (chain != nullptr && chain->containsHapticGeneratingEffect()))) {
             ALOGD("%s, haptic playback was %s for track %d",
                     __func__, muted ? "muted" : "unmuted", mTrack->id());
             mTrack->setHapticPlaybackEnabled(!muted);
+            if (chain != nullptr) {
+                chain->setHapticScale_l(mTrack->id(), muted ? os::HapticScale::mute()
+                        : mTrack->getHapticScale());
+            }
             return true;
         }
     }

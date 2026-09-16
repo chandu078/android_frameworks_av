@@ -172,6 +172,7 @@ public:
 
             /** Return haptic playback of the track is enabled or not, used in mixer. */
     bool getHapticPlaybackEnabled() const final { return mHapticPlaybackEnabled; }
+    bool isSystemMusicHaptics() const final { return mSystemMusicHaptics; }
             /** Set haptic playback of the track is enabled or not, should be
              *  set after query or get callback from vibrator service */
     void setHapticPlaybackEnabled(bool hapticPlaybackEnabled) final {
@@ -354,6 +355,8 @@ protected:
 
     sp<OpPlayAudioMonitor>  mOpPlayAudioMonitor;
 
+    // Immutable after construction; bound to the session AND original client UID.
+    bool                mSystemMusicHaptics = false;
     bool                mHapticPlaybackEnabled = false; // indicates haptic playback enabled or not
     // scale to play haptic data
     os::HapticScale mHapticScale = os::HapticScale::mute();
